@@ -1,42 +1,65 @@
 "use strict";
 
 const http = require("http");
+const fs = require("fs");
+const path = require("path");
 const { randomUUID } = require("crypto");
 const { WebSocketServer } = require("ws");
 
 const ADAPTER_PORT = parseInt(process.env.DEMO_ADAPTER_PORT || "18789", 10);
 const MAIN_KEY = "main";
 const MODELS = [{ id: "demo/mock-office", name: "Mock Office", provider: "demo" }];
+const HARNESS_DIR = path.resolve(__dirname, "..", ".harness");
 
-const agents = new Map([
-  [
-    "demo-orchestrator",
-    {
-      id: "demo-orchestrator",
-      name: "Avery",
-      role: "Orchestrator",
-      workspace: "/demo/orchestrator",
-    },
-  ],
-  [
-    "demo-researcher",
-    {
-      id: "demo-researcher",
-      name: "Mika",
-      role: "Research",
-      workspace: "/demo/research",
-    },
-  ],
-  [
-    "demo-builder",
-    {
-      id: "demo-builder",
-      name: "Rune",
-      role: "Builder",
-      workspace: "/demo/builder",
-    },
-  ],
-]);
+function titleCase(slug) {
+  return slug
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function readHarnessMission(slug) {
+  try {
+    const content = fs.readFileSync(path.join(HARNESS_DIR, "agents", `${slug}.md`), "utf8");
+    const match = content.match(/## Mission\s+([^#]+)/i);
+    return match?.[1]?.trim().replace(/\s+/g, " ") || "Specialist in the Harness workflow.";
+  } catch {
+    return "Specialist in the Harness workflow.";
+  }
+}
+
+function readHarnessAgentSlugs() {
+  try {
+    const manifest = fs.readFileSync(path.join(HARNESS_DIR, "manifest", "harness.yaml"), "utf8");
+    const section = manifest.match(/\n  agents:\n([\s\S]*?)(?=\n  workflows:)/)?.[1] || "";
+    const slugs = [...section.matchAll(/^    - ([a-z0-9-]+)$/gm)].map((match) => match[1]);
+    if (slugs.length > 0) return slugs;
+  } catch {}
+  return ["planner", "architect", "implementer", "reviewer", "qa", "security", "performance", "release"];
+}
+
+function createHarnessAgents() {
+  return new Map(
+    readHarnessAgentSlugs().map((slug) => {
+      const id = `harness-${slug}`;
+      return [
+        id,
+        {
+          id,
+          name: titleCase(slug),
+          role: titleCase(slug),
+          mission: readHarnessMission(slug),
+          workspace: `/.harness/agents/${slug}.md`,
+          source: "harness",
+        },
+      ];
+    })
+  );
+}
+
+const agents = createHarnessAgents();
+const DEFAULT_AGENT_ID = agents.has("harness-planner") ? "harness-planner" : agents.keys().next().value;
 
 const files = new Map();
 const sessionSettings = new Map();
@@ -84,8 +107,9 @@ function agentListPayload() {
     id: agent.id,
     name: agent.name,
     workspace: agent.workspace,
-    identity: { name: agent.name, emoji: "🤖" },
+    identity: { name: agent.name, emoji: agent.id === DEFAULT_AGENT_ID ? "🧭" : "🤖" },
     role: agent.role,
+    description: agent.mission,
   }));
 }
 
@@ -94,25 +118,17 @@ function buildDemoReply(agent, message) {
   const compactMessage = normalized.replace(/\s+/g, " ").trim();
   const greetingOnly = /^(hi|hello|hey|yo|sup|what'?s up|how are you)[!.? ]*$/i.test(compactMessage);
   const opening =
-    agent.role === "Orchestrator"
-      ? `${agent.name} here. Demo office is live and the team is synced.`
-      : `${agent.name} checking in from the ${agent.role.toLowerCase()} desk.`;
+    agent.id === DEFAULT_AGENT_ID
+      ? `${agent.name} here. The Harness office is live with ${agents.size} specialists loaded from the project manifest.`
+      : `${agent.name} checking in from the Harness ${agent.role.toLowerCase()} desk.`;
   if (greetingOnly) {
-    return agent.role === "Orchestrator"
-      ? `${opening} I can coordinate the room, sketch a plan, or hand work to Research and Builder.`
-      : `${opening} Give me a concrete task and I will respond in-character with a focused next step.`;
+    return `${opening} Mission: ${agent.mission} This demonstration shows routing and responsibilities; Codex or Hermes performs real repository execution.`;
   }
   const focusLine =
     compactMessage.length > 160
       ? `${compactMessage.slice(0, 160).trimEnd()}...`
       : compactMessage;
-  const action =
-    agent.role === "Research"
-      ? "I would turn this into source checks, constraints, and follow-up questions."
-      : agent.role === "Builder"
-        ? "I would translate this into implementation steps, edge cases, and validation."
-        : "I would route the work, keep the team aligned, and summarize the next move.";
-  return `${opening} Focus: ${focusLine}. ${action}`;
+  return `${opening} Focus: ${focusLine}. My Harness mission is: ${agent.mission} I would apply that contract and hand the result back with evidence.`;
 }
 
 async function handleMethod(method, params, id, sendEvent) {
@@ -120,7 +136,7 @@ async function handleMethod(method, params, id, sendEvent) {
 
   switch (method) {
     case "agents.list":
-      return resOk(id, { defaultId: "demo-orchestrator", mainKey: MAIN_KEY, agents: agentListPayload() });
+      return resOk(id, { defaultId: DEFAULT_AGENT_ID, mainKey: MAIN_KEY, agents: agentListPayload() });
 
     case "agents.create": {
       const name = typeof p.name === "string" && p.name.trim() ? p.name.trim() : "Demo Agent";
@@ -152,7 +168,7 @@ async function handleMethod(method, params, id, sendEvent) {
 
     case "agents.delete": {
       const agentId = typeof p.agentId === "string" ? p.agentId.trim() : "";
-      if (agentId && agents.has(agentId) && agentId !== "demo-orchestrator") {
+      if (agentId && agents.has(agentId) && agentId !== DEFAULT_AGENT_ID) {
         agents.delete(agentId);
         clearHistory(sessionKeyFor(agentId));
       }
@@ -160,13 +176,13 @@ async function handleMethod(method, params, id, sendEvent) {
     }
 
     case "agents.files.get": {
-      const key = `${p.agentId || "demo-orchestrator"}/${p.name || ""}`;
+      const key = `${p.agentId || DEFAULT_AGENT_ID}/${p.name || ""}`;
       const content = files.get(key);
       return resOk(id, { file: content !== undefined ? { content } : { missing: true } });
     }
 
     case "agents.files.set": {
-      const key = `${p.agentId || "demo-orchestrator"}/${p.name || ""}`;
+      const key = `${p.agentId || DEFAULT_AGENT_ID}/${p.name || ""}`;
       files.set(key, typeof p.content === "string" ? p.content : "");
       return resOk(id, {});
     }
@@ -247,7 +263,7 @@ async function handleMethod(method, params, id, sendEvent) {
     }
 
     case "sessions.patch": {
-      const key = typeof p.key === "string" ? p.key : sessionKeyFor("demo-orchestrator");
+      const key = typeof p.key === "string" ? p.key : sessionKeyFor(DEFAULT_AGENT_ID);
       const current = sessionSettings.get(key) || {};
       const next = { ...current };
       if (p.model !== undefined) next.model = p.model;
@@ -262,15 +278,15 @@ async function handleMethod(method, params, id, sendEvent) {
     }
 
     case "sessions.reset": {
-      const key = typeof p.key === "string" ? p.key : sessionKeyFor("demo-orchestrator");
+      const key = typeof p.key === "string" ? p.key : sessionKeyFor(DEFAULT_AGENT_ID);
       clearHistory(key);
       return resOk(id, { ok: true });
     }
 
     case "chat.send": {
-      const sessionKey = typeof p.sessionKey === "string" ? p.sessionKey : sessionKeyFor("demo-orchestrator");
-      const agentId = sessionKey.startsWith("agent:") ? sessionKey.split(":")[1] : "demo-orchestrator";
-      const agent = agents.get(agentId) || agents.get("demo-orchestrator");
+      const sessionKey = typeof p.sessionKey === "string" ? p.sessionKey : sessionKeyFor(DEFAULT_AGENT_ID);
+      const agentId = sessionKey.startsWith("agent:") ? sessionKey.split(":")[1] : DEFAULT_AGENT_ID;
+      const agent = agents.get(agentId) || agents.get(DEFAULT_AGENT_ID);
       const message = typeof p.message === "string" ? p.message.trim() : String(p.message || "").trim();
       const runId = typeof p.idempotencyKey === "string" && p.idempotencyKey ? p.idempotencyKey : randomId();
       if (!message) return resOk(id, { status: "no-op", runId });
@@ -358,7 +374,7 @@ async function handleMethod(method, params, id, sendEvent) {
     }
 
     case "chat.history": {
-      const sessionKey = typeof p.sessionKey === "string" ? p.sessionKey : sessionKeyFor("demo-orchestrator");
+      const sessionKey = typeof p.sessionKey === "string" ? p.sessionKey : sessionKeyFor(DEFAULT_AGENT_ID);
       return resOk(id, { sessionKey, messages: getHistory(sessionKey) });
     }
 
@@ -479,9 +495,9 @@ function startAdapter() {
                 agents: [...agents.values()].map((agent) => ({
                   agentId: agent.id,
                   name: agent.name,
-                  isDefault: agent.id === "demo-orchestrator",
+                  isDefault: agent.id === DEFAULT_AGENT_ID,
                 })),
-                defaultAgentId: "demo-orchestrator",
+                defaultAgentId: DEFAULT_AGENT_ID,
               },
               sessionDefaults: { mainKey: MAIN_KEY },
             },
@@ -510,7 +526,8 @@ function startAdapter() {
 
   httpServer.listen(ADAPTER_PORT, "127.0.0.1", () => {
     console.log(`[demo-gateway] Listening on ws://localhost:${ADAPTER_PORT}`);
-    console.log("[demo-gateway] No OpenClaw or Hermes required.");
+    console.log(`[demo-gateway] Loaded ${agents.size} agents from the Harness manifest.`);
+    console.log("[demo-gateway] Visualization mode; Codex or Hermes is required for real repository execution.");
   });
 }
 
@@ -519,6 +536,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  agents,
+  DEFAULT_AGENT_ID,
+  createHarnessAgents,
   handleMethod,
   startAdapter,
 };

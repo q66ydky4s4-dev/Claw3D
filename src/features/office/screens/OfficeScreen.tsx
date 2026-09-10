@@ -2728,9 +2728,14 @@ export function OfficeScreen({
   );
 
   useEffect(() => {
-    if (status !== "connected" || agentsLoaded) return;
+    if (status !== "connected") return;
+    const hasOnlyDisconnectedDemoSeed =
+      selectedAdapterType === "demo" &&
+      state.agents.length === 1 &&
+      state.agents[0]?.agentId === MAIN_AGENT_ID;
+    if (agentsLoaded && !hasOnlyDisconnectedDemoSeed) return;
     void loadAgents({ forceSettings: true });
-  }, [agentsLoaded, loadAgents, status]);
+  }, [agentsLoaded, loadAgents, selectedAdapterType, state.agents, status]);
 
   useEffect(() => {
     if (status !== "connected") return;
