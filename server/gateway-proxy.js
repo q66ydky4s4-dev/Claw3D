@@ -9,8 +9,8 @@ const MAX_FRAME_SIZE = 256 * 1024;
 /** Sustained frame rate per connection. */
 const MAX_FRAMES_PER_SECOND = 60;
 
-/** Allow short startup bursts before rate limiting. */
-const MAX_FRAME_BURST = 120;
+/** Allow fleet hydration bursts while retaining the sustained per-connection limit. */
+const MAX_FRAME_BURST = 256;
 
 const buildErrorResponse = (id, code, message) => {
   return {
