@@ -1,0 +1,98 @@
+schema_version: "1"
+name: saas01-harness-engineering
+version_file: VERSION
+version: 1.0.0
+status: stable
+language: pt-BR
+license: MIT
+entrypoint: AGENTS.md
+platforms:
+  hermes: portable-adapter
+  codex: native-agents-md
+  chatgpt_work: project-context
+modules:
+  agents:
+    - planner
+    - architect
+    - implementer
+    - reviewer
+    - qa
+    - security
+    - performance
+    - release
+    - stack-analyst
+    - frontend
+    - backend
+    - api
+    - database
+    - supabase
+    - auth
+    - billing
+    - integrations
+    - ux
+    - test-strategist
+    - threat-modeler
+    - accessibility
+    - devops
+    - sre
+    - incident-commander
+    - documentation
+    - governance
+    - knowledge-curator
+    - product-manager
+    - analytics
+    - seo
+    - growth
+    - experimenter
+    - evaluator
+  workflows:
+    - feature
+    - review
+    - release
+    - stack-discovery
+    - product-change
+    - database-change
+    - integration-change
+    - test-strategy
+    - security-review
+    - performance-review
+    - accessibility-review
+    - delivery
+    - incident-response
+    - rollback
+    - decision-record
+    - documentation-lifecycle
+    - retrospective
+    - product-discovery
+    - analytics-instrumentation
+    - experiment
+    - seo-review
+    - harness-evaluation
+  prompts:
+    - task-intake
+    - implementation
+    - review
+    - frontend-change
+    - backend-change
+    - data-change
+    - integration-change
+    - release-certification
+    - risk-matrix
+    - accessibility
+    - performance-budget
+    - deployment
+    - incident
+  checklists:
+    - definition-of-ready
+    - definition-of-done
+    - release
+    - stack-profile
+    - data-change
+    - integration-change
+commands:
+  bootstrap: ./scripts/bootstrap.sh
+  detect_stack: ./scripts/detect-stack.sh
+  install_adapter: ./scripts/install-adapter.sh
+  evaluate: ./scripts/evaluate.sh
+  release_check: ./scripts/release-check.sh
+  validate: ./scripts/validate.sh
