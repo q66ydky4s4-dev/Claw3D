@@ -1,5 +1,6 @@
 // @vitest-environment node
 
+import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 
 describe("createAccessGate", () => {
@@ -43,6 +44,44 @@ describe("createAccessGate", () => {
     const gate = createAccessGate({ token: "abc" });
     expect(
       gate.allowUpgrade({ headers: { cookie: "studio_access=abc" } })
+    ).toBe(true);
+  });
+
+  it("serves a login page and creates a protected cookie for the right password", async () => {
+    const { createAccessGate } = await import("../../server/access-gate");
+    const gate = createAccessGate({ token: "correct horse" });
+    const req = new EventEmitter() as EventEmitter & Record<string, unknown>;
+    req.url = "/studio-login";
+    req.method = "POST";
+    req.headers = { "x-forwarded-proto": "https" };
+    req.socket = { remoteAddress: "127.0.0.1" };
+    const headers = new Map<string, string>();
+    let statusCode = 0;
+    const ended = new Promise<void>((resolve) => {
+      const res = {
+        setHeader: (name: string, value: string) => headers.set(name, value),
+        end: () => resolve(),
+        get statusCode() {
+          return statusCode;
+        },
+        set statusCode(value: number) {
+          statusCode = value;
+        },
+      };
+      expect(gate.handleHttp(req, res)).toBe(true);
+    });
+
+    req.emit("data", Buffer.from("token=correct+horse"));
+    req.emit("end");
+    await ended;
+
+    expect(statusCode).toBe(303);
+    expect(headers.get("Location")).toBe("/office");
+    expect(headers.get("Set-Cookie")).toContain("studio_access=correct%20horse");
+    expect(headers.get("Set-Cookie")).toContain("HttpOnly");
+    expect(headers.get("Set-Cookie")).toContain("Secure");
+    expect(
+      gate.allowUpgrade({ headers: { cookie: headers.get("Set-Cookie") } })
     ).toBe(true);
   });
 

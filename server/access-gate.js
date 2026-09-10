@@ -1,5 +1,39 @@
 const crypto = require("node:crypto");
 
+const LOGIN_PATH = "/studio-login";
+
+const renderLoginPage = (message = "") => `<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acessar Claw3D</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #080b12; color: #f8fafc; }
+      main { width: min(88vw, 25rem); padding: 2rem; border: 1px solid #263244; border-radius: 1rem; background: #111827; box-shadow: 0 1.5rem 4rem #0008; }
+      h1 { margin: 0 0 .5rem; font-size: 1.5rem; }
+      p { margin: 0 0 1.25rem; color: #aebbd0; line-height: 1.5; }
+      label { display: block; margin-bottom: .5rem; font-weight: 700; }
+      input { box-sizing: border-box; width: 100%; padding: .8rem; border: 1px solid #41516b; border-radius: .6rem; background: #070b12; color: white; font: inherit; }
+      button { width: 100%; margin-top: 1rem; padding: .85rem; border: 0; border-radius: .6rem; background: #22c55e; color: #041109; font: inherit; font-weight: 800; cursor: pointer; }
+      .error { color: #fca5a5; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Claw3D + Harness</h1>
+      <p>Digite a senha de acesso para abrir o escritório com os 33 agentes do Harness.</p>
+      ${message ? `<p class="error" role="alert">${message}</p>` : ""}
+      <form method="post" action="${LOGIN_PATH}">
+        <label for="token">Senha de acesso</label>
+        <input id="token" name="token" type="password" required autofocus autocomplete="current-password" />
+        <button type="submit">Entrar</button>
+      </form>
+    </main>
+  </body>
+</html>`;
+
 
 const parseCookies = (header) => {
   const raw = typeof header === "string" ? header : "";
@@ -11,7 +45,11 @@ const parseCookies = (header) => {
     const key = part.slice(0, idx).trim();
     const value = part.slice(idx + 1).trim();
     if (!key) continue;
-    out[key] = value;
+    try {
+      out[key] = decodeURIComponent(value);
+    } catch {
+      out[key] = value;
+    }
   }
   return out;
 };
@@ -105,6 +143,51 @@ function createAccessGate(options) {
 
   const handleHttp = (req, res) => {
     if (!enabled) return false;
+    const requestUrl = new URL(String(req.url || "/"), "http://studio.local");
+    if (requestUrl.pathname === LOGIN_PATH && req.method === "GET") {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store");
+      res.end(renderLoginPage());
+      return true;
+    }
+    if (requestUrl.pathname === LOGIN_PATH && req.method === "POST") {
+      const ip = resolveClientIp(req);
+      if (rateLimiter.isLimited(ip)) {
+        res.statusCode = 429;
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("Cache-Control", "no-store");
+        res.end(renderLoginPage("Muitas tentativas. Aguarde um minuto e tente novamente."));
+        return true;
+      }
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+        if (body.length > 4096) req.destroy();
+      });
+      req.on("end", () => {
+        const submitted = new URLSearchParams(body).get("token") || "";
+        if (!safeCompare(submitted, token)) {
+          rateLimiter.recordFailure(ip);
+          res.statusCode = rateLimiter.isLimited(ip) ? 429 : 401;
+          res.setHeader("Content-Type", "text/html; charset=utf-8");
+          res.setHeader("Cache-Control", "no-store");
+          res.end(renderLoginPage("Senha incorreta."));
+          return;
+        }
+        rateLimiter.reset(ip);
+        const forwardedProto = String(req.headers?.["x-forwarded-proto"] || "").toLowerCase();
+        const secure = Boolean(req.socket?.encrypted) || forwardedProto === "https";
+        res.statusCode = 303;
+        res.setHeader("Location", "/office");
+        res.setHeader(
+          "Set-Cookie",
+          `${cookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`
+        );
+        res.end();
+      });
+      return true;
+    }
     const auth = getAuthState(req);
     if (!auth.authorized) {
       const statusCode = auth.limited ? 429 : 401;
@@ -119,13 +202,20 @@ function createAccessGate(options) {
           })
         );
       } else {
-        res.statusCode = statusCode;
-        res.setHeader("Content-Type", "text/plain");
-        res.end(
-          auth.limited
-            ? "Too many failed studio access attempts. Wait a minute and retry."
-            : "Studio access token required. Set the studio_access cookie to access this page."
-        );
+        if (!auth.limited && (req.method === "GET" || !req.method)) {
+          res.statusCode = 302;
+          res.setHeader("Location", LOGIN_PATH);
+          res.setHeader("Cache-Control", "no-store");
+          res.end();
+        } else {
+          res.statusCode = statusCode;
+          res.setHeader("Content-Type", "text/plain");
+          res.end(
+            auth.limited
+              ? "Too many failed studio access attempts. Wait a minute and retry."
+              : "Studio access token required. Set the studio_access cookie to access this page."
+          );
+        }
       }
       return true;
     }
